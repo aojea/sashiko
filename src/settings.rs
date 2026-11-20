@@ -129,6 +129,17 @@ pub struct ForgeSettings {
     /// ingestion active).
     #[serde(default = "default_forge_poll_interval_secs")]
     pub poll_interval_secs: u64,
+    /// Logins whose pull requests are reviewed automatically. Empty reviews
+    /// pull requests of every author. Accepts a TOML array or a
+    /// comma-separated string via `SASHIKO__FORGE__AUTHORS`. The rule is
+    /// `ForgeReviewFilter` in `forge.rs`.
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub authors: Vec<String>,
+    /// Labels of which a pull request must carry at least one to be reviewed
+    /// automatically. Empty does not look at labels. Accepts a TOML array or
+    /// a comma-separated string via `SASHIKO__FORGE__LABELS`.
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub labels: Vec<String>,
     /// Forge login Sashiko posts reviews as. Fetched PR comments carrying
     /// the Sashiko review header are dropped as Sashiko's own output only
     /// when posted by this login; when unset, only by a GitHub App account
@@ -1773,6 +1784,8 @@ fn default_forge() -> ForgeSettings {
         app_private_key_path: None,
         repos: Vec::new(),
         poll_interval_secs: default_forge_poll_interval_secs(),
+        authors: Vec::new(),
+        labels: Vec::new(),
         bot_login: None,
     }
 }
@@ -2929,6 +2942,26 @@ mod tests {
 
         let empty_env: ForgeSettings = serde_json::from_str(r#"{"repos": ""}"#).unwrap();
         assert!(empty_env.repos.is_empty());
+    }
+
+    #[test]
+    fn test_forge_review_filter_lists_deserialization() {
+        let def = default_forge();
+        assert!(def.authors.is_empty());
+        assert!(def.labels.is_empty());
+
+        let from_toml: ForgeSettings =
+            toml::from_str("authors = [\"octocat\"]\nlabels = [\"sig/network\", \"area/dns\"]\n")
+                .unwrap();
+        assert_eq!(from_toml.authors, vec!["octocat"]);
+        assert_eq!(from_toml.labels, vec!["sig/network", "area/dns"]);
+
+        // The environment can only carry a string.
+        let from_env_str: ForgeSettings =
+            serde_json::from_str(r#"{"authors": "octocat, hubot", "labels": "sig/network"}"#)
+                .unwrap();
+        assert_eq!(from_env_str.authors, vec!["octocat", "hubot"]);
+        assert_eq!(from_env_str.labels, vec!["sig/network"]);
     }
 
     #[test]

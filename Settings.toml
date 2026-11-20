@@ -31,6 +31,14 @@ enabled = false
 # (0 = disabled).
 # poll_interval_secs = 120
 
+# Limit automatic review to part of a repository. An empty list does not
+# restrict; when both are set, a pull request must match both. Manual
+# submission is not filtered. See designs/DESIGN_FORGE_REVIEW_FILTERS.md.
+# Review only pull requests opened by these logins:
+# authors = ["octocat"]
+# Review only pull requests that carry at least one of these labels:
+# labels = ["needs-sashiko"]
+
 [subsystems]
 # Regex map: email address pattern -> subsystem name.
 # mapping = [{ pattern = ".*netdev@vger.kernel.org.*", name = "netdev" }]

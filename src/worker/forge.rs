@@ -30,6 +30,7 @@ const GITHUB_POLL_PER_PAGE: u32 = 50;
 pub struct ForgeWorker {
     db: Arc<Database>,
     settings: ForgeSettings,
+    review_filter: crate::forge::ForgeReviewFilter,
     max_retries: u32,
     cached_token: Mutex<Option<(String, i64)>>,
     fetch_sender: Option<mpsc::Sender<FetchRequest>>,
@@ -41,6 +42,7 @@ impl ForgeWorker {
     pub fn new(db: Arc<Database>, settings: ForgeSettings, max_retries: u32) -> Self {
         Self {
             db,
+            review_filter: crate::forge::ForgeReviewFilter::from_settings(&settings),
             settings,
             max_retries,
             cached_token: Mutex::new(None),
@@ -315,6 +317,17 @@ impl ForgeWorker {
                     {
                         continue;
                     }
+                    // A filtered pull request is not an error, so it does
+                    // not hold the watermark back. A label added later
+                    // updates the pull request, which brings it above the
+                    // watermark again.
+                    if let Some(reason) = self.review_filter.decide(&pr.metadata).skip_reason() {
+                        debug!(
+                            "Polled GitHub PR {}#{} is not reviewed: {}",
+                            repo, pr_number, reason
+                        );
+                        continue;
+                    }
                     match self
                         .db
                         .has_forge_pr_head_ingested(&repo, pr_number, &pr.metadata.head_sha)
@@ -397,6 +410,12 @@ impl ForgeWorker {
             "Starting Forge PR Poller (interval: {}s, repos: {:?})...",
             self.settings.poll_interval_secs, repos
         );
+        if !self.review_filter.is_unrestricted() {
+            info!(
+                "Forge review filter is active (authors: {:?}, labels: {:?})",
+                self.settings.authors, self.settings.labels
+            );
+        }
         self.poll_github_repos_once(&client).await;
         let delay = Duration::from_secs(self.settings.poll_interval_secs.max(10));
         loop {
@@ -792,6 +811,114 @@ mod tests {
             "unexpected v3 subject: {v3_subject}"
         );
         assert_eq!(v3_status, "Fetching");
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_poll_github_repos_applies_the_review_filter() {
+        let db_settings = crate::settings::DatabaseSettings {
+            url: ":memory:".to_string(),
+            token: String::new(),
+        };
+        let db = Arc::new(Database::new(&db_settings).await.unwrap());
+        db.migrate().await.unwrap();
+
+        let base = "1111111111111111111111111111111111111111";
+        let pull = |number: i64, login: Option<&str>, labels: &[&str], updated_at: &str| {
+            let labels: Vec<serde_json::Value> = labels
+                .iter()
+                .map(|name| serde_json::json!({ "name": name }))
+                .collect();
+            let mut item = serde_json::json!({
+                "number": number,
+                "title": format!("Pull request {number}"),
+                "html_url": format!("https://github.com/sashiko-dev/sashiko/pull/{number}"),
+                "draft": false,
+                "updated_at": updated_at,
+                "labels": labels,
+                "head": { "sha": format!("{number:040}") },
+                "base": {
+                    "sha": base,
+                    "repo": { "clone_url": "https://github.com/sashiko-dev/sashiko.git" }
+                }
+            });
+            if let Some(login) = login {
+                item["user"] = serde_json::json!({ "login": login });
+            }
+            item
+        };
+
+        let first_update = chrono::Utc::now() + chrono::Duration::seconds(30);
+        let first = first_update.to_rfc3339();
+        let mock_state = MockGitHubState {
+            pulls: Arc::new(Mutex::new(serde_json::json!([
+                pull(1, Some("octocat"), &["kind/bug", "sig/network"], &first),
+                pull(2, Some("octocat"), &["kind/bug"], &first),
+                pull(3, Some("hubot"), &["sig/network"], &first),
+                pull(4, None, &["sig/network"], &first),
+            ]))),
+            reject_bearer_once: Arc::new(AtomicUsize::new(0)),
+        };
+        let app = Router::new()
+            .route("/repos/sashiko-dev/sashiko/pulls", get(mock_pulls_handler))
+            .with_state(mock_state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_handle = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let mut settings = crate::settings::Settings::new().unwrap();
+        settings.forge.enabled = true;
+        settings.forge.api_token = None;
+        settings.forge.repos = vec!["sashiko-dev/sashiko".to_string()];
+        settings.forge.authors = vec!["OctoCat".to_string()];
+        settings.forge.labels = vec!["sig/network".to_string()];
+
+        let (fetch_tx, _fetch_rx) = mpsc::channel(10);
+        let worker = ForgeWorker::new(db.clone(), settings.forge.clone(), 3)
+            .with_poller(fetch_tx, PathBuf::from("."))
+            .with_api_base(format!("http://{}", addr));
+        let client = crate::worker::outbox_client().unwrap();
+
+        // 1. Only #1 has a listed author and a listed label. #2 lacks the
+        // label, #3 has another author, and #4 has no known author.
+        assert_eq!(worker.poll_github_repos_once(&client).await, 1);
+        let queued = db.lock_pending_fetch_queue().await.unwrap().unwrap();
+        assert_eq!(queued.mr_number, Some(1));
+        db.mark_fetch_queue_done(queued.id, queued.locked_at)
+            .await
+            .unwrap();
+        assert!(db.lock_pending_fetch_queue().await.unwrap().is_none());
+        db.conn
+            .execute(
+                "UPDATE patchsets SET status = 'Reviewed' WHERE mr_number = 1",
+                (),
+            )
+            .await
+            .unwrap();
+
+        // A filtered pull request is not an error, so the watermark moves
+        // past it.
+        let watermark = db
+            .bootstrap_or_get_forge_poll_watermark("sashiko-dev/sashiko", 0)
+            .await
+            .unwrap();
+        assert_eq!(watermark, first_update.timestamp());
+
+        // 2. #2 gets the label later. That updates it, so the poller sees it
+        // above the watermark and queues it. #1 is not queued again.
+        let second = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
+        *mock_state.pulls.lock().await = serde_json::json!([
+            pull(2, Some("octocat"), &["kind/bug", "SIG/Network"], &second),
+            pull(1, Some("octocat"), &["kind/bug", "sig/network"], &first),
+            pull(3, Some("hubot"), &["sig/network"], &first),
+            pull(4, None, &["sig/network"], &first),
+        ]);
+        assert_eq!(worker.poll_github_repos_once(&client).await, 1);
+        let queued = db.lock_pending_fetch_queue().await.unwrap().unwrap();
+        assert_eq!(queued.mr_number, Some(2));
 
         server_handle.abort();
     }

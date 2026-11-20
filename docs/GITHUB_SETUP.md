@@ -289,6 +289,27 @@ poll_interval_secs = 120
 
 **Note:** All repositories must be accessible from the git repository configured in `Settings.toml` or Sashiko will fail to fetch the commits.
 
+### Limiting Which Pull Requests Are Reviewed
+
+By default Sashiko reviews every pull request that a webhook reports or that the poller finds, except those of Dependabot. On a busy repository that is a full review of each commit of each pull request that changes. To review only a part, list authors, labels, or both under `[forge]`:
+
+```toml
+[forge]
+enabled = true
+repos = ["owner/repo"]
+# Review only pull requests opened by these logins.
+authors = ["octocat"]
+# Review only pull requests that carry at least one of these labels.
+labels = ["needs-sashiko"]
+```
+
+- An empty list does not restrict. When both lists are set, a pull request must match both.
+- Logins and labels are compared without regard to case.
+- A filtered webhook delivery is answered with `200` and `"status": "ignored"`, so GitHub does not show it as failed.
+- Keep polling on when you filter by label. A label that is added after the last push changes no commits, so the webhook does not start a review for it; the poller finds the pull request on its next pass.
+- A change of the lists applies to pull requests that are updated afterwards. It does not start reviews of the backlog.
+- `sashiko-cli submit` and `POST /api/submit` are not filtered.
+
 ## Webhook Payload Reference
 
 Sashiko processes the following fields from GitHub's `pull_request` webhook:

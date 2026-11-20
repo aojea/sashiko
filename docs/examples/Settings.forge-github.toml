@@ -18,6 +18,10 @@ webhook_secret = "YOUR_HEX_SECRET_HERE"
 # app_private_key_path) or, failing that, with api_token.
 # post_mode = "live"
 # api_token = "ghp_..."
+# Review only part of the repository: pull requests of these authors, or
+# pull requests with one of these labels. An empty list does not restrict.
+# authors = ["octocat"]
+# labels = ["needs-sashiko"]
 
 [server]
 host = "127.0.0.1"

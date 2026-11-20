@@ -167,6 +167,117 @@ pub struct ForgeMetadata {
     pub pr_title: Option<String>,
     pub pr_url: Option<String>,
     pub author: Option<String>,
+    /// Names of the labels on the pull or merge request. Empty when it has
+    /// none or the forge did not send them.
+    pub labels: Vec<String>,
+}
+
+/// Reads label names from a forge label array.
+///
+/// `name_key` is the field that holds the name: `name` on GitHub, `title` on
+/// GitLab. Labels are optional data, so a missing or malformed array is an
+/// empty list and never a reason to reject the payload.
+fn label_names(labels: &serde_json::Value, name_key: &str) -> Vec<String> {
+    labels
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item[name_key].as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What [`ForgeReviewFilter`] decided for one pull request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewFilterDecision {
+    /// The pull request is reviewed.
+    Review,
+    /// `forge.authors` is set and does not name the author.
+    AuthorNotListed,
+    /// `forge.labels` is set and the pull request carries none of them.
+    LabelNotListed,
+}
+
+impl ReviewFilterDecision {
+    /// Why the pull request is not reviewed, for logs and webhook answers.
+    /// `None` when it is reviewed.
+    pub fn skip_reason(self) -> Option<&'static str> {
+        match self {
+            ReviewFilterDecision::Review => None,
+            ReviewFilterDecision::AuthorNotListed => {
+                Some("the pull request author is not in forge.authors")
+            }
+            ReviewFilterDecision::LabelNotListed => {
+                Some("the pull request has none of the labels in forge.labels")
+            }
+        }
+    }
+}
+
+/// The operator's limits on which pull requests are reviewed automatically
+/// (`forge.authors` and `forge.labels`).
+///
+/// An empty list does not restrict. Inside one list one match is enough; when
+/// both lists are set, both must match. Names are compared without regard to
+/// case. The webhook route and the poller both ask this type, so the rule
+/// exists once.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ForgeReviewFilter {
+    authors: Vec<String>,
+    labels: Vec<String>,
+}
+
+impl ForgeReviewFilter {
+    pub fn new(authors: &[String], labels: &[String]) -> Self {
+        let normalize = |names: &[String]| -> Vec<String> {
+            names
+                .iter()
+                .map(|name| name.trim().to_lowercase())
+                .filter(|name| !name.is_empty())
+                .collect()
+        };
+        Self {
+            authors: normalize(authors),
+            labels: normalize(labels),
+        }
+    }
+
+    pub fn from_settings(settings: &crate::settings::ForgeSettings) -> Self {
+        Self::new(&settings.authors, &settings.labels)
+    }
+
+    /// Whether every pull request passes.
+    pub fn is_unrestricted(&self) -> bool {
+        self.authors.is_empty() && self.labels.is_empty()
+    }
+
+    pub fn decide(&self, metadata: &ForgeMetadata) -> ReviewFilterDecision {
+        if !self.authors.is_empty() {
+            // An unknown author is not reviewed: the filter bounds cost, so
+            // it fails closed.
+            let listed = metadata
+                .author
+                .as_deref()
+                .map(|author| author.trim().to_lowercase())
+                .is_some_and(|author| self.authors.contains(&author));
+            if !listed {
+                return ReviewFilterDecision::AuthorNotListed;
+            }
+        }
+        if !self.labels.is_empty() {
+            let listed = metadata
+                .labels
+                .iter()
+                .any(|label| self.labels.contains(&label.trim().to_lowercase()));
+            if !listed {
+                return ReviewFilterDecision::LabelNotListed;
+            }
+        }
+        ReviewFilterDecision::Review
+    }
 }
 
 /// Returns true if the authenticated forge username belongs to Dependabot
@@ -332,6 +443,7 @@ impl ForgeProvider for GitHubForge {
             .as_str()
             .or_else(|| payload["sender"]["login"].as_str())
             .map(|s| s.to_string());
+        let labels = label_names(&pr["labels"], "name");
 
         let repo_url = payload["repository"]["clone_url"]
             .as_str()
@@ -351,6 +463,7 @@ impl ForgeProvider for GitHubForge {
             pr_title,
             pr_url,
             author,
+            labels,
         };
 
         Ok((action, metadata))
@@ -461,6 +574,13 @@ impl ForgeProvider for GitLabForge {
         let pr_title = attrs["title"].as_str().map(|s| s.to_string());
         let pr_url = attrs["url"].as_str().map(|s| s.to_string());
         let author = payload["user"]["username"].as_str().map(|s| s.to_string());
+        // GitLab sends the labels at the top level and, in newer versions,
+        // inside object_attributes too.
+        let labels = if payload["labels"].is_array() {
+            label_names(&payload["labels"], "title")
+        } else {
+            label_names(&attrs["labels"], "title")
+        };
 
         let repo_url = payload["project"]["git_http_url"]
             .as_str()
@@ -480,6 +600,7 @@ impl ForgeProvider for GitLabForge {
             pr_title,
             pr_url,
             author,
+            labels,
         };
 
         Ok((action, metadata))
@@ -763,6 +884,7 @@ pub async fn list_github_open_pull_requests(
             .map(str::to_string)
             .or_else(|| Some(format!("https://github.com/{}/pull/{}", repo, pr_number)));
         let author = pr["user"]["login"].as_str().map(str::to_string);
+        let labels = label_names(&pr["labels"], "name");
 
         out.push(GitHubPolledPullRequest {
             metadata: ForgeMetadata {
@@ -773,6 +895,7 @@ pub async fn list_github_open_pull_requests(
                 pr_title,
                 pr_url,
                 author,
+                labels,
             },
             updated_at,
         });
@@ -1697,6 +1820,190 @@ mod tests {
         let (action, metadata) = forge.parse_payload(&body).unwrap();
         assert_eq!(action, "merge_request");
         assert_eq!(metadata.pr_number, 10);
+    }
+
+    #[test]
+    fn test_parse_payload_reads_labels_and_tolerates_bad_ones() {
+        let sha = "a".repeat(40);
+        let github = |labels: serde_json::Value| {
+            let payload = serde_json::json!({
+                "action": "opened",
+                "pull_request": {
+                    "head": {"sha": &sha},
+                    "base": {"sha": &sha},
+                    "number": 42,
+                    "labels": labels
+                },
+                "repository": {"clone_url": "https://github.com/org/repo.git"}
+            });
+            let body = Bytes::from(serde_json::to_vec(&payload).unwrap());
+            GitHubForge.parse_payload(&body).unwrap().1.labels
+        };
+        assert_eq!(
+            github(serde_json::json!([{"name": "sig/network"}, {"name": "kind/bug"}])),
+            vec!["sig/network", "kind/bug"]
+        );
+        // Labels are optional data: a broken list is an empty list, never a
+        // rejected delivery.
+        assert_eq!(
+            github(serde_json::json!([{"id": 7}, "text", {"name": "kind/bug"}])),
+            vec!["kind/bug"]
+        );
+        assert!(github(serde_json::json!("sig/network")).is_empty());
+        assert!(github(serde_json::Value::Null).is_empty());
+
+        let gitlab = |top: serde_json::Value, attrs: serde_json::Value| {
+            let mut payload = serde_json::json!({
+                "object_kind": "merge_request",
+                "object_attributes": {
+                    "last_commit": {"id": &sha},
+                    "iid": 10,
+                    "labels": attrs
+                },
+                "project": {"git_http_url": "https://gitlab.com/org/repo.git"}
+            });
+            if !top.is_null() {
+                payload["labels"] = top;
+            }
+            let body = Bytes::from(serde_json::to_vec(&payload).unwrap());
+            GitLabForge.parse_payload(&body).unwrap().1.labels
+        };
+        assert_eq!(
+            gitlab(
+                serde_json::json!([{"title": "backend"}]),
+                serde_json::json!([{"title": "ignored"}])
+            ),
+            vec!["backend"]
+        );
+        assert_eq!(
+            gitlab(
+                serde_json::Value::Null,
+                serde_json::json!([{"title": "frontend"}])
+            ),
+            vec!["frontend"]
+        );
+        assert!(gitlab(serde_json::Value::Null, serde_json::Value::Null).is_empty());
+    }
+
+    fn filter_subject(author: Option<&str>, labels: &[&str]) -> ForgeMetadata {
+        ForgeMetadata {
+            repo_url: None,
+            base_sha: "b".repeat(40),
+            head_sha: "a".repeat(40),
+            pr_number: 1,
+            pr_title: None,
+            pr_url: None,
+            author: author.map(str::to_string),
+            labels: labels.iter().map(|l| l.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn test_review_filter_decisions() {
+        use ReviewFilterDecision::{AuthorNotListed, LabelNotListed, Review};
+        let list =
+            |names: &[&str]| -> Vec<String> { names.iter().map(|n| n.to_string()).collect() };
+        // Configured authors, configured labels, the author of the pull
+        // request, its labels, and the expected decision.
+        type Case<'a> = (
+            &'a [&'a str],
+            &'a [&'a str],
+            Option<&'a str>,
+            &'a [&'a str],
+            ReviewFilterDecision,
+        );
+        let cases: &[Case] = &[
+            // No lists: everything is reviewed, as before the filter existed.
+            (&[], &[], Some("octocat"), &[], Review),
+            (&[], &[], None, &[], Review),
+            // Authors only.
+            (&["octocat"], &[], Some("octocat"), &[], Review),
+            (&["octocat"], &[], Some("OctoCat "), &[], Review),
+            (&[" OCTOCAT "], &[], Some("octocat"), &[], Review),
+            (&["octocat", "hubot"], &[], Some("hubot"), &[], Review),
+            (&["octocat"], &[], Some("octocat2"), &[], AuthorNotListed),
+            // An unknown author fails closed.
+            (&["octocat"], &[], None, &[], AuthorNotListed),
+            // Labels only: one match is enough.
+            (
+                &[],
+                &["sig/network"],
+                Some("anyone"),
+                &["kind/bug", "SIG/Network"],
+                Review,
+            ),
+            (
+                &[],
+                &["sig/network", "area/dns"],
+                None,
+                &["area/dns"],
+                Review,
+            ),
+            (
+                &[],
+                &["sig/network"],
+                Some("anyone"),
+                &["sig/node"],
+                LabelNotListed,
+            ),
+            (&[], &["sig/network"], Some("anyone"), &[], LabelNotListed),
+            // Both lists: both must match, and the author is reported first.
+            (
+                &["octocat"],
+                &["sig/network"],
+                Some("octocat"),
+                &["sig/network"],
+                Review,
+            ),
+            (
+                &["octocat"],
+                &["sig/network"],
+                Some("octocat"),
+                &["sig/node"],
+                LabelNotListed,
+            ),
+            (
+                &["octocat"],
+                &["sig/network"],
+                Some("hubot"),
+                &["sig/network"],
+                AuthorNotListed,
+            ),
+            (
+                &["octocat"],
+                &["sig/network"],
+                Some("hubot"),
+                &[],
+                AuthorNotListed,
+            ),
+            // Entries that are empty after trimming do not restrict.
+            (&["", "  "], &[""], Some("anyone"), &[], Review),
+        ];
+        for (authors, labels, author, pr_labels, expected) in cases {
+            let filter = ForgeReviewFilter::new(&list(authors), &list(labels));
+            assert_eq!(
+                filter.decide(&filter_subject(*author, pr_labels)),
+                *expected,
+                "authors {authors:?} labels {labels:?} against {author:?} {pr_labels:?}"
+            );
+        }
+
+        assert!(ForgeReviewFilter::new(&[], &[]).is_unrestricted());
+        assert!(ForgeReviewFilter::new(&list(&[" "]), &[]).is_unrestricted());
+        assert!(!ForgeReviewFilter::new(&[], &list(&["x"])).is_unrestricted());
+        assert!(Review.skip_reason().is_none());
+        assert!(
+            AuthorNotListed
+                .skip_reason()
+                .unwrap()
+                .contains("forge.authors")
+        );
+        assert!(
+            LabelNotListed
+                .skip_reason()
+                .unwrap()
+                .contains("forge.labels")
+        );
     }
 
     // --- HMAC verification tests ---

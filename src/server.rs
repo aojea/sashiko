@@ -2724,6 +2724,20 @@ async fn forge_webhook(
         })));
     }
 
+    let review_filter = crate::forge::ForgeReviewFilter::from_settings(&state.settings.forge);
+    if let Some(reason) = review_filter.decide(&metadata).skip_reason() {
+        debug!(
+            "{} PR #{} is not reviewed: {}",
+            forge.name(),
+            metadata.pr_number,
+            reason
+        );
+        return Ok(Json(serde_json::json!({
+            "status": "ignored",
+            "message": format!("Not reviewed: {reason}")
+        })));
+    }
+
     if crate::fetcher::url_has_embedded_credentials(metadata.repo_url.as_deref()) {
         warn!(
             "Rejected {} PR #{} webhook with credentialed repository URL",
@@ -7249,6 +7263,142 @@ F:	*
         assert_eq!(after_details["reviews"].as_array().unwrap().len(), 1);
     }
 
+    /// The application state that the forge webhook tests share: no webhook
+    /// secret, so `allow_all_submit` is what lets the test deliveries in.
+    fn forge_webhook_test_state(
+        db: Arc<Database>,
+        settings: crate::settings::Settings,
+        sender: mpsc::Sender<Event>,
+        fetch_sender: mpsc::Sender<FetchRequest>,
+    ) -> Arc<AppState> {
+        Arc::new(AppState {
+            settings: Arc::new(settings),
+            db,
+            sender,
+            fetch_sender,
+            read_only: false,
+            forge_registry: Arc::new(crate::forge::ForgeRegistry::new()),
+            allow_all_submit: true,
+            smtp_enabled: false,
+            dry_run: true,
+            local_token: None,
+            email_worker_heartbeat: None,
+            sign_in_link_rate_limiter: SignInLinkRateLimiter::new(),
+            stats_timeline_cache: AsyncMapCache::new(Duration::from_secs(60)),
+            stats_reviews_cache: AsyncCache::new(Duration::from_secs(60)),
+            stats_tools_cache: AsyncCache::new(Duration::from_secs(60)),
+            messages_count_cache: AsyncCache::new(Duration::from_secs(30)),
+            patchsets_count_cache: AsyncCache::new(Duration::from_secs(30)),
+            patchsets_homepage_cache: AsyncCache::new(Duration::from_secs(10)),
+            messages_homepage_cache: AsyncCache::new(Duration::from_secs(10)),
+            bug_subsystems_cache: AsyncMapCache::new(Duration::from_secs(5)),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_forge_webhook_applies_the_review_filter() {
+        let db_settings = crate::settings::DatabaseSettings {
+            url: ":memory:".to_string(),
+            token: String::new(),
+        };
+        let db = Arc::new(Database::new(&db_settings).await.unwrap());
+        db.migrate().await.unwrap();
+
+        let mut settings = crate::settings::Settings::new().unwrap();
+        settings.forge.enabled = true;
+        settings.forge.webhook_secret = None;
+        settings.forge.authors = vec!["octocat".to_string()];
+        settings.forge.labels = vec!["sig/network".to_string()];
+
+        let (event_tx, _event_rx) = mpsc::channel(10);
+        let (fetch_tx, _fetch_rx) = mpsc::channel(10);
+        let state = forge_webhook_test_state(db.clone(), settings, event_tx, fetch_tx);
+
+        async fn deliver(
+            state: &Arc<AppState>,
+            number: i64,
+            login: &str,
+            labels: &[&str],
+        ) -> serde_json::Value {
+            let labels: Vec<serde_json::Value> = labels
+                .iter()
+                .map(|name| serde_json::json!({ "name": name }))
+                .collect();
+            let payload = serde_json::json!({
+                "action": "opened",
+                "number": number,
+                "pull_request": {
+                    "number": number,
+                    "title": "Filtered or not",
+                    "html_url": format!("https://github.com/sashiko-dev/sashiko/pull/{number}"),
+                    "user": { "login": login, "type": "User" },
+                    "labels": labels,
+                    "base": { "sha": "1111111111111111111111111111111111111111" },
+                    "head": { "sha": format!("{number:040}") }
+                },
+                "repository": {
+                    "clone_url": "https://github.com/sashiko-dev/sashiko.git"
+                }
+            });
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert("x-github-event", "pull_request".parse().unwrap());
+            let request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/webhook/github")
+                .header("x-github-event", "pull_request")
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&payload).unwrap(),
+                ))
+                .unwrap();
+            let addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+            let Json(response) = forge_webhook(
+                ConnectInfo(addr),
+                State(state.clone()),
+                Path("github".to_string()),
+                headers,
+                request,
+            )
+            .await
+            .unwrap_or_else(|r| panic!("webhook failed with status {}", r.status()));
+            response
+        }
+
+        // A filtered pull request is answered with success, so that the forge
+        // does not show a failed delivery, and nothing is stored for it.
+        let other_author = deliver(&state, 1, "hubot", &["sig/network"]).await;
+        assert_eq!(other_author["status"], "ignored");
+        assert!(
+            other_author["message"]
+                .as_str()
+                .unwrap()
+                .contains("forge.authors"),
+            "{other_author}"
+        );
+        let no_label = deliver(&state, 2, "octocat", &["kind/bug"]).await;
+        assert_eq!(no_label["status"], "ignored");
+        assert!(
+            no_label["message"]
+                .as_str()
+                .unwrap()
+                .contains("forge.labels"),
+            "{no_label}"
+        );
+        assert!(db.lock_pending_fetch_queue().await.unwrap().is_none());
+        let mut rows = db
+            .conn
+            .query("SELECT COUNT(*) FROM patchsets", ())
+            .await
+            .unwrap();
+        let patchsets: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(patchsets, 0);
+        drop(rows);
+
+        let listed = deliver(&state, 3, "OctoCat", &["kind/bug", "sig/network"]).await;
+        assert_eq!(listed["status"], "accepted");
+        let queued = db.lock_pending_fetch_queue().await.unwrap().unwrap();
+        assert_eq!(queued.mr_number, Some(3));
+    }
+
     #[tokio::test]
     async fn test_forge_webhook_persists_fetch_queue_and_deduplicates_completed() {
         let db_settings = crate::settings::DatabaseSettings {
@@ -7268,28 +7418,7 @@ F:	*
         let (fetch_tx, fetch_rx) = mpsc::channel(1);
         drop(fetch_rx);
 
-        let state = Arc::new(AppState {
-            settings: Arc::new(settings),
-            db: db.clone(),
-            sender: event_tx,
-            fetch_sender: fetch_tx,
-            read_only: false,
-            forge_registry: Arc::new(crate::forge::ForgeRegistry::new()),
-            allow_all_submit: true,
-            smtp_enabled: false,
-            dry_run: true,
-            local_token: None,
-            email_worker_heartbeat: None,
-            sign_in_link_rate_limiter: SignInLinkRateLimiter::new(),
-            stats_timeline_cache: AsyncMapCache::new(Duration::from_secs(60)),
-            stats_reviews_cache: AsyncCache::new(Duration::from_secs(60)),
-            stats_tools_cache: AsyncCache::new(Duration::from_secs(60)),
-            messages_count_cache: AsyncCache::new(Duration::from_secs(30)),
-            patchsets_count_cache: AsyncCache::new(Duration::from_secs(30)),
-            patchsets_homepage_cache: AsyncCache::new(Duration::from_secs(10)),
-            messages_homepage_cache: AsyncCache::new(Duration::from_secs(10)),
-            bug_subsystems_cache: AsyncMapCache::new(Duration::from_secs(5)),
-        });
+        let state = forge_webhook_test_state(db.clone(), settings, event_tx, fetch_tx);
 
         let payload = serde_json::json!({
             "action": "opened",
