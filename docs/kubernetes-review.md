@@ -2,8 +2,9 @@
 
 Sashiko can review commits in a local checkout of
 [Kubernetes](https://github.com/kubernetes/kubernetes). Support is a pilot
-covering local review only: there is no public hosted Kubernetes instance, and
-Sashiko does not ingest Kubernetes pull requests.
+aimed at local review: there is no public hosted Kubernetes instance. A private
+daemon can watch pull requests of authors or labels that you list; that mode is
+experimental and is described [below](#watching-pull-requests-with-a-private-daemon).
 
 > [!IMPORTANT]
 > Review sends the commit and the surrounding source to your LLM provider. In
@@ -128,6 +129,82 @@ Everything after the pull request number goes to `sashiko review`:
 The script keeps the fetched commits under `refs/sashiko/pr/<number>/`, so
 that `--resume` finds them later. `scripts/review_github_pr.sh -h` shows how to
 remove them.
+
+## Watching pull requests with a private daemon
+
+The Sashiko daemon can poll a GitHub repository and review pull requests as
+they change. `kubernetes/kubernetes` has more than a thousand open pull
+requests, and more than a hundred change each day, so a daemon for it needs a
+filter: `forge.authors`, `forge.labels`, or both. See
+[Limiting Which Pull Requests Are Reviewed](GITHUB_SETUP.md#limiting-which-pull-requests-are-reviewed).
+
+> [!WARNING]
+> This mode is experimental for Kubernetes. With `--no-ai` it was checked that
+> the daemon polls `kubernetes/kubernetes`, applies the filter, fetches the
+> commits of a listed pull request, and prepares them for review. The AI review
+> itself was not run in a daemon for Kubernetes; it uses the same workflow as
+> the local review.
+
+The daemon needs the full build (`cargo build --release`) and a clone of its
+own. It fetches into that clone and creates worktrees of it, so do not point it
+at the checkout you work in:
+
+```bash
+# In the Sashiko checkout
+git clone https://github.com/kubernetes/kubernetes.git third_party/kubernetes
+```
+
+Copy `Settings.toml` to a new file and change these keys in the copy. The
+daemon needs a database and a worktree directory of its own; it empties the
+worktree directory when it starts:
+
+```toml
+[project]
+kind = "kubernetes"
+
+[forge]
+enabled = true
+provider = "github"
+repos = ["kubernetes/kubernetes"]
+# Without a filter, every pull request that changes is reviewed.
+authors = ["your-github-login"]
+# labels = ["sig/network"]
+
+[database]
+url = "kubernetes.db"
+
+[git]
+repository_path = "third_party/kubernetes"
+
+[review]
+worktree_dir = "review_trees_kubernetes"
+
+[server]
+host = "127.0.0.1"
+```
+
+Start it from the Sashiko checkout, and open the web UI at
+`http://localhost:8080/` to see the reviews. Add `--port <number>` when another
+program uses port 8080:
+
+```bash
+SASHIKO_CONFIG=/path/to/the/copy.toml ./target/release/sashiko --project kubernetes
+```
+
+- Leave `post_mode` at its default, `"off"`. The reviews stay in the local
+  database and nothing is posted to GitHub. Do not post reviews on
+  `kubernetes/kubernetes` without the agreement of the project.
+- Add `--no-ai` for a first run. The daemon then shows which pull requests it
+  would review, at no cost.
+- Each new head of a listed pull request starts a review of each of its
+  commits. Read the cost note at the top of this page before you list a label
+  that many pull requests carry.
+- On its first start with a new database, the poller looks at pull requests
+  that changed in the last five minutes. It does not review the backlog.
+- Without `forge.api_token`, GitHub allows 60 API requests an hour from one
+  address. The default `poll_interval_secs = 120` uses about 30.
+- `scripts/review_github_pr.sh` stays the tool for one pull request that the
+  filter does not list.
 
 ## Reading the results
 

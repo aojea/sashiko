@@ -31,8 +31,9 @@ GitHub pull requests instead of DCO sign-off and mail.
   `projects/kubernetes/mailing_lists.toml` exists because every project has
   one, and it tracks nothing.
 - Daemon review. Baseline resolution knows the Kubernetes remote and its
-  `master` branch, because the code paths are shared, but no Kubernetes daemon
-  has been run.
+  `master` branch, because the code paths are shared. A daemon was run against
+  `kubernetes/kubernetes` only with `--no-ai`, to check that pull requests are
+  polled, filtered, and fetched. No review was run in a daemon.
 - Other repositories of the `kubernetes` and `kubernetes-sigs` organizations.
   The staging repositories are in scope because their source of truth is
   `staging/src/k8s.io/` in this tree.
@@ -224,9 +225,11 @@ staging repository the label `staging/src`, so paths under
 
 ## 7. Open questions
 
-- **Hosted review.** The forge code keeps a pull request title but not its
-  description, labels, or draft state. It has no filter for which pull requests
-  to review, and it does not know the Prow bots. All three matter for
+- **Hosted review.** The forge code keeps a pull request title and its labels
+  but not its description or draft state, and it does not know the Prow bots.
+  Automatic review can be limited to listed authors and labels
+  (`DESIGN_FORGE_REVIEW_FILTERS.md`), which is enough for a private instance.
+  A filter on changed paths does not exist. All of these matter for
   `kubernetes/kubernetes`.
 - **Generated files.** See section 5.
 - **Benchmark.** Kubernetes has no `Fixes: <sha>` trailers. Reverts, cherry-pick
