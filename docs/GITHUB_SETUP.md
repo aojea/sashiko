@@ -73,6 +73,16 @@ Review your own local changes:
 cargo run --bin sashiko-cli -- submit HEAD~3..HEAD
 ```
 
+#### Option D: Review a Pull Request without the Server
+
+`scripts/review_github_pr.sh` fetches the commits of a pull request into a
+checkout and runs the local reviewer on them. It needs no server, no webhook,
+and no database, and it posts nothing to GitHub:
+```bash
+# From a checkout of the repository; options after the number go to "sashiko review"
+/path/to/sashiko/scripts/review_github_pr.sh owner/repo 123 --project <project>
+```
+
 ### Step 4: Monitor Progress
 
 Open your browser to the web UI:

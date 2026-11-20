@@ -86,6 +86,49 @@ Review a range when a pull request has several commits. A later commit often
 carries the generated code, the feature gate wiring, or the tests of an earlier
 one, and the review of each commit is told which commits follow it.
 
+## Reviewing a pull request
+
+GitHub publishes the commits of every pull request, so a pull request needs no
+daemon. [`scripts/review_github_pr.sh`](../scripts/review_github_pr.sh) asks
+GitHub for the base branch of the pull request, fetches its commits into the
+checkout, and runs `sashiko review` on them. It checks nothing out: the work
+tree and the branches of the checkout stay as they are. The script needs `git`,
+`curl`, and `jq`.
+
+Run it from the Kubernetes checkout, or pass the checkout with `-C`.
+Everything after the pull request number goes to `sashiko review`:
+
+```bash
+# Review an open pull request
+/path/to/sashiko/scripts/review_github_pr.sh kubernetes/kubernetes 144367 \
+    --project kubernetes --settings ~/.config/sashiko-kubernetes.toml
+
+# List the commits that a review would cover, without a review
+/path/to/sashiko/scripts/review_github_pr.sh kubernetes/kubernetes 144367 \
+    --project kubernetes --settings ~/.config/sashiko-kubernetes.toml --no-ai
+
+# Also give the review the title and the description of the pull request
+/path/to/sashiko/scripts/review_github_pr.sh -d kubernetes/kubernetes 144367 \
+    --project kubernetes --settings ~/.config/sashiko-kubernetes.toml
+```
+
+- A merged pull request works too. It is reviewed against the base branch as
+  it was before the merge, which lets you try the review on a change whose
+  outcome you know.
+- Each commit is reviewed separately. Look at the commit list that the script
+  prints before the review starts: a commit that only regenerates code costs
+  many tokens and finds little.
+- `-d` is for pull requests whose author you trust. The description reaches
+  the model as part of the prompt. The script marks it as untrusted data, but a
+  model can still follow text that it reads.
+- The diff that GitHub serves for a pull request is not used. It has no commit
+  messages, and the review reads the files at each commit and at its parent,
+  which a diff does not contain.
+
+The script keeps the fetched commits under `refs/sashiko/pr/<number>/`, so
+that `--resume` finds them later. `scripts/review_github_pr.sh -h` shows how to
+remove them.
+
 ## Reading the results
 
 Progress goes to stderr and the report to stdout. For structured findings, use
@@ -155,8 +198,9 @@ from, and is loaded only for patches it applies to.
   trailer. The commit message is checked against the Kubernetes commit message
   guidelines instead, and those findings are `Low`.
 - **No pull request metadata.** The release note, the `/kind` label, and the AI
-  usage disclosure are in the pull request description, which a local review
-  does not read.
+  usage disclosure are in the pull request description, which a review does not
+  read. `scripts/review_github_pr.sh -d` can add the title and the description
+  as context, but no stage checks them against the Kubernetes rules.
 - **Generated and vendored files are not a review subject.** The files named in
   `.generated_files`, `api/openapi-spec/`, and `vendor/` stay in the diff and
   are read only as evidence of what a hand-written change does. They still cost
