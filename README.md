@@ -6,7 +6,7 @@
 
 > **Sashiko** (刺し子, literally "little stabs") is a form of decorative reinforcement stitching from Japan. Originally used to reinforce points of wear or to repair worn places or tears with patches, here it represents our mission to reinforce the Linux kernel and other critical open-source systems software through automated, intelligent patch review.
 
-Sashiko is a self-contained, agentic code review system built primarily for the Linux kernel, with dedicated profiles for GCC, QEMU, Zephyr RTOS, and Sashiko itself. It combines project-specific prompts, source-verified code notes, and a multi-stage verification protocol to review proposed changes locally from your git checkout or automatically from mailing lists and git forges.
+Sashiko is a self-contained, agentic code review system built primarily for the Linux kernel, with dedicated profiles for GCC, QEMU, Zephyr RTOS, Kubernetes, and Sashiko itself. It combines project-specific prompts, source-verified code notes, and a multi-stage verification protocol to review proposed changes locally from your git checkout or automatically from mailing lists and git forges.
 
 - **Linux Kernel (`sashiko.dev`):** Browse live kernel patch reviews and tracked bugs at [sashiko.dev](https://sashiko.dev), and see the [Guide for Kernel Maintainers](projects/linux/MAINTAINERS_GUIDE.md) for configuring mailing list tracking, maintainer notes, and email policies.
 - **Mailing List:** Join [`sashiko@lists.linux.dev`](https://lore.kernel.org/sashiko) for announcements, feedback, and discussions (automated review replies use `sashiko-reviews@lists.linux.dev`).
@@ -23,6 +23,7 @@ The Linux kernel is Sashiko's primary focus and most mature target (`--project l
 | **Sashiko** | `sashiko` | **Production** | [sashiko.sashiko.dev](https://sashiko.sashiko.dev) | Local review, GitHub pull requests, bug tracking |
 | **QEMU** | `qemu` | **Pilot** | None | Local review, mailing lists (self-hosted) |
 | **Zephyr RTOS** | `zephyr` | **Pilot** | None | Local review |
+| **Kubernetes** | `kubernetes` | **Pilot** | None | Local review |
 
 Compute infrastructure and LLM tokens for the public Sashiko instances are generously provided and funded by **Google**.
 
@@ -54,7 +55,7 @@ Gemini is used by default. For Claude, OpenAI-compatible endpoints, AWS Bedrock,
 
 ### 3. Review Your Patches
 
-Run `sashiko review` from inside your Linux kernel checkout (or pass `--project <gcc|qemu|zephyr|sashiko>` in another supported repository):
+Run `sashiko review` from inside your Linux kernel checkout (or pass `--project <gcc|qemu|zephyr|kubernetes|sashiko>` in another supported repository):
 
 ```bash
 # Review the latest Linux kernel commit
@@ -67,7 +68,7 @@ sashiko review --report-preexisting
 # Report only the one or two pre-existing bugs closely related to the change
 sashiko review --report-related-preexisting [--related-preexisting-min-severity medium]
 
-# Review commits in another supported project (gcc, qemu, zephyr, sashiko)
+# Review commits in another supported project (gcc, qemu, zephyr, kubernetes, sashiko)
 sashiko review --project gcc
 
 # Continue a review cut short by a quota stop, a timeout or Ctrl-C
@@ -129,6 +130,7 @@ Sashiko evaluates patches through specialized parallel analysis stages followed 
 - **[CLI Reference (`sashiko-cli`)](docs/sashiko-cli.md):** Submitting patches and querying status on a running Sashiko daemon.
 - **[Forge Setup Guide](docs/FORGE_SETUP.md):** Webhook integration for [GitHub](docs/GITHUB_SETUP.md) (used in production on `sashiko.sashiko.dev`; third-party setups experimental), [GitLab](docs/GITLAB_SETUP.md), and [Webhook Security](docs/WEBHOOK_SECURITY.md).
 - **[Reviewing Zephyr](docs/zephyr-review.md)** *(Pilot)*: Local review of Zephyr RTOS commits with `--project zephyr`.
+- **[Reviewing Kubernetes](docs/kubernetes-review.md)** *(Pilot)*: Local review of Kubernetes commits with `--project kubernetes`.
 - **[Benchmarking Guide](docs/benchmarking.md):** Evaluating review accuracy against historical bugs.
 - **[Contributing Guide](CONTRIBUTING.md):** DCO sign-off, local verification (`make check-pr`), and the Sashiko-for-Sashiko review workflow.
 

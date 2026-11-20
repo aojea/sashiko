@@ -214,7 +214,7 @@ sashiko [--project <PROJECT>] benchmark [OPTIONS] <FILE>
 
 | Argument / Flag | Description |
 |-----------------|-------------|
-| `--project <PROJECT>` | Project profile to benchmark (`linux` default, `gcc`, `sashiko`, `qemu`, `zephyr`). |
+| `--project <PROJECT>` | Project profile to benchmark (`linux` default, `gcc`, `sashiko`, `qemu`, `zephyr`, `e2fsprogs`, `kubernetes`). |
 | `<FILE>` / `-f, --file <FILE>` | Path to the benchmark JSON file (required). |
 | `-r, --repo <PATH_OR_URL>` | Override the target git repository path or URL. |
 | `--db <PATH>` | Explicit SQLite database path to create or re-analyze. |
