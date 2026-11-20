@@ -2196,6 +2196,62 @@ diff --git a/drivers/net/foo.c b/drivers/net/foo.c
         }
     }
 
+    #[tokio::test]
+    async fn kubernetes_commits_get_no_signed_off_by_audit() {
+        // Kubernetes contributors sign a CLA. A commit without the trailer
+        // must not put a sign-off section in front of the model, which the
+        // same commit does for a DCO project.
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path();
+        run_git_test(repo, &["init"]);
+        run_git_test(repo, &["config", "user.name", "Test User"]);
+        run_git_test(repo, &["config", "user.email", "test@example.com"]);
+        run_git_test(repo, &["commit", "--allow-empty", "-m", "baseline"]);
+        let baseline = run_git_test(repo, &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+        run_git_test(repo, &["commit", "--allow-empty", "-m", "kubelet: fix"]);
+        let target = run_git_test(repo, &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+        let range = format!("{baseline}..{target}");
+        let diff = format!(
+            "commit {target}\nAuthor: Test User <test@example.com>\n\n    kubelet: fix\n\n    Stop the pod worker before the volumes are unmounted.\n"
+        );
+
+        let kubernetes = analyze_fixes_for_commit(
+            ProjectId::Kubernetes,
+            repo,
+            &baseline,
+            &target,
+            Some(&range),
+            &diff,
+            "",
+        )
+        .await;
+        assert!(
+            kubernetes.prompt_context.is_empty(),
+            "context was: {}",
+            kubernetes.prompt_context
+        );
+
+        let zephyr = analyze_fixes_for_commit(
+            ProjectId::Zephyr,
+            repo,
+            &baseline,
+            &target,
+            Some(&range),
+            &diff,
+            "",
+        )
+        .await;
+        assert!(
+            zephyr.prompt_context.contains("MISSING"),
+            "context was: {}",
+            zephyr.prompt_context
+        );
+    }
+
     #[test]
     fn sanitize_fixes_findings_canonicalizes_and_drops_invalid_suggestions() {
         let analysis = FixesAnalysis {

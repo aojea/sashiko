@@ -19,6 +19,7 @@ pub mod design_assessment;
 pub mod e2fsprogs_patch_review;
 pub mod gcc_patch_review;
 pub mod guard;
+pub mod kubernetes_patch_review;
 pub mod linux_bug;
 pub mod linux_patch_review;
 pub mod linux_scan;
@@ -42,6 +43,7 @@ pub fn stage_short_label(project: ProjectId, stage: &str) -> Option<&'static str
         ProjectId::Qemu => qemu_patch_review::stage_short_label(stage),
         ProjectId::Zephyr => zephyr_patch_review::stage_short_label(stage),
         ProjectId::E2fsprogs => e2fsprogs_patch_review::stage_short_label(stage),
+        ProjectId::Kubernetes => kubernetes_patch_review::stage_short_label(stage),
     }
 }
 
@@ -70,6 +72,10 @@ pub fn default_stage_count(project: ProjectId) -> usize {
         ProjectId::E2fsprogs => {
             e2fsprogs_patch_review::ANALYSIS_STAGES.len()
                 + e2fsprogs_patch_review::CONSOLIDATION_STAGES.len()
+        }
+        ProjectId::Kubernetes => {
+            kubernetes_patch_review::ANALYSIS_STAGES.len()
+                + kubernetes_patch_review::CONSOLIDATION_STAGES.len()
         }
     }
 }
@@ -196,6 +202,23 @@ pub fn planned_stages_from(project: ProjectId, stage_names: &[&'static str]) -> 
             if !planned.is_empty() {
                 planned.extend(
                     e2fsprogs_patch_review::CONSOLIDATION_STAGES
+                        .iter()
+                        .map(|s| s.name.to_string()),
+                );
+            }
+            planned
+        }
+        ProjectId::Kubernetes => {
+            let mut planned: Vec<String> = stage_names
+                .iter()
+                .filter(|n| {
+                    kubernetes_patch_review::analysis_stage_by_name(n).is_some() || is_combined(n)
+                })
+                .map(|n| n.to_string())
+                .collect();
+            if !planned.is_empty() {
+                planned.extend(
+                    kubernetes_patch_review::CONSOLIDATION_STAGES
                         .iter()
                         .map(|s| s.name.to_string()),
                 );

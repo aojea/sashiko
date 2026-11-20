@@ -43,6 +43,7 @@ pub enum ProjectId {
     Qemu,
     Zephyr,
     E2fsprogs,
+    Kubernetes,
 }
 
 impl ProjectId {
@@ -56,6 +57,7 @@ impl ProjectId {
             ProjectId::Qemu => "qemu",
             ProjectId::Zephyr => "zephyr",
             ProjectId::E2fsprogs => "e2fsprogs",
+            ProjectId::Kubernetes => "kubernetes",
         }
     }
 
@@ -68,13 +70,18 @@ impl ProjectId {
             ProjectId::Qemu => "QEMU",
             ProjectId::Zephyr => "Zephyr",
             ProjectId::E2fsprogs => "e2fsprogs",
+            ProjectId::Kubernetes => "Kubernetes",
         }
     }
 
     /// The upstream development branch, independent of a fork's URL.
     pub fn mainline_branch(self) -> &'static str {
         match self {
-            ProjectId::Linux | ProjectId::Gcc | ProjectId::Qemu | ProjectId::E2fsprogs => "master",
+            ProjectId::Linux
+            | ProjectId::Gcc
+            | ProjectId::Qemu
+            | ProjectId::E2fsprogs
+            | ProjectId::Kubernetes => "master",
             ProjectId::Sashiko | ProjectId::Zephyr => "main",
         }
     }
@@ -101,6 +108,7 @@ impl ProjectId {
                     || url.contains("tytso/e2fsprogs")
                     || url.contains("e2fsprogs.git.sourceforge.net")
             }
+            ProjectId::Kubernetes => url.contains("kubernetes/kubernetes"),
         }
     }
 
@@ -121,6 +129,7 @@ impl ProjectId {
             ProjectId::Qemu => "qemu",
             ProjectId::Zephyr => "zephyr",
             ProjectId::E2fsprogs => "e2fsprogs",
+            ProjectId::Kubernetes => "kubernetes",
         }
     }
 
@@ -128,6 +137,8 @@ impl ProjectId {
     ///
     /// Indexing one is several seconds of work against a tree that may not have
     /// the file at all, and everything downstream of the index is Linux-only.
+    /// Kubernetes records ownership in per-directory OWNERS files, which the
+    /// index does not read.
     pub fn uses_maintainers(self) -> bool {
         match self {
             ProjectId::Linux => true,
@@ -135,7 +146,8 @@ impl ProjectId {
             | ProjectId::Gcc
             | ProjectId::Qemu
             | ProjectId::Zephyr
-            | ProjectId::E2fsprogs => false,
+            | ProjectId::E2fsprogs
+            | ProjectId::Kubernetes => false,
         }
     }
 
@@ -154,7 +166,8 @@ impl ProjectId {
             | ProjectId::Gcc
             | ProjectId::Qemu
             | ProjectId::Zephyr
-            | ProjectId::E2fsprogs => crate::authority::TrustedBots(&[]),
+            | ProjectId::E2fsprogs
+            | ProjectId::Kubernetes => crate::authority::TrustedBots(&[]),
         }
     }
 
@@ -168,6 +181,7 @@ impl ProjectId {
             ProjectId::Qemu => "projects/qemu/mailing_lists.toml",
             ProjectId::Zephyr => "projects/zephyr/mailing_lists.toml",
             ProjectId::E2fsprogs => "projects/e2fsprogs/mailing_lists.toml",
+            ProjectId::Kubernetes => "projects/kubernetes/mailing_lists.toml",
         }
     }
 
@@ -181,6 +195,7 @@ impl ProjectId {
             ProjectId::Qemu => "projects/qemu/bugs_access.toml",
             ProjectId::Zephyr => "projects/zephyr/bugs_access.toml",
             ProjectId::E2fsprogs => "projects/e2fsprogs/bugs_access.toml",
+            ProjectId::Kubernetes => "projects/kubernetes/bugs_access.toml",
         }
     }
 
@@ -215,6 +230,10 @@ impl ProjectId {
             ProjectId::E2fsprogs => Upstream {
                 url: "https://git.kernel.org/pub/scm/fs/ext2/e2fsprogs.git",
                 seed: Seed::Mirror("https://github.com/tytso/e2fsprogs.git"),
+            },
+            ProjectId::Kubernetes => Upstream {
+                url: "https://github.com/kubernetes/kubernetes.git",
+                seed: Seed::None,
             },
         }
     }
@@ -263,6 +282,7 @@ impl FromStr for ProjectId {
             "qemu" => Ok(ProjectId::Qemu),
             "zephyr" => Ok(ProjectId::Zephyr),
             "e2fsprogs" => Ok(ProjectId::E2fsprogs),
+            "kubernetes" => Ok(ProjectId::Kubernetes),
             _ => Err(UnknownProject(s.to_string())),
         }
     }
@@ -303,6 +323,7 @@ impl ProjectId {
         ProjectId::Qemu,
         ProjectId::Zephyr,
         ProjectId::E2fsprogs,
+        ProjectId::Kubernetes,
     ];
 }
 
@@ -339,10 +360,11 @@ mod tests {
                 | ProjectId::Gcc
                 | ProjectId::Qemu
                 | ProjectId::Zephyr
-                | ProjectId::E2fsprogs => {}
+                | ProjectId::E2fsprogs
+                | ProjectId::Kubernetes => {}
             }
         }
-        assert_eq!(ProjectId::ALL.len(), 6);
+        assert_eq!(ProjectId::ALL.len(), 7);
     }
 
     #[test]
@@ -361,6 +383,7 @@ mod tests {
         assert_eq!(ProjectId::Qemu.display_name(), "QEMU");
         assert_eq!(ProjectId::Zephyr.display_name(), "Zephyr");
         assert_eq!(ProjectId::E2fsprogs.display_name(), "e2fsprogs");
+        assert_eq!(ProjectId::Kubernetes.display_name(), "Kubernetes");
     }
 
     #[test]

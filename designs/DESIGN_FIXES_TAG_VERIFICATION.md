@@ -17,7 +17,7 @@ Reviewers check three properties on every patch in the `goal` stage:
 ### Project Scope
 - **`Signed-off-by:` Audit Enabled**: `linux`, `sashiko`, `qemu`, `zephyr`.
 - **`Fixes:` Audit Enabled**: `linux`, `sashiko`, `qemu`.
-- **Disabled**: `gcc` (GCC accepts commits under FSF copyright assignment without DCO `Signed-off-by:` and uses GNU ChangeLog blocks and Bugzilla `PR <component>/<number>` tags rather than `Fixes: <sha> ("<subject>")` trailers).
+- **Disabled**: `gcc` (GCC accepts commits under FSF copyright assignment without DCO `Signed-off-by:` and uses GNU ChangeLog blocks and Bugzilla `PR <component>/<number>` tags rather than `Fixes: <sha> ("<subject>")` trailers), `kubernetes` (Kubernetes requires a signed CLA and no commit trailer, and links a fix to its issue in the pull request description; see `DESIGN_KUBERNETES_REVIEW.md`, section 4).
 
 ### Design Goals
 - **Deterministic DCO Pre-Classification**: Pre-parse `Signed-off-by:` trailers (and common tag-prefix typos such as `Sign-off-by:`) in Rust, classifying missing trailers, missing/malformed/placeholder/localhost/LLM-noreply emails, placeholder names, AI/bot names, and obvious handles (`user_123`, lowercase username matching email local-part) as `CLEARLY BROKEN`, capitalized single-word names as `SUSPECT` (so legal mononyms can be distinguished from handles by context), and normal multi-word human names (including human names such as `Claude Shannon` or `Ai Chao`) as `SYNTAX VALID`.

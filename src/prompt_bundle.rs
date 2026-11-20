@@ -99,6 +99,15 @@ pub fn e2fsprogs_severity_guide() -> &'static str {
         .expect("e2fsprogs/severity.md must exist in prompt bundle")
 }
 
+/// Returns the compiled-in content of `kubernetes/severity.md`.
+pub fn kubernetes_severity_guide() -> &'static str {
+    PROMPT_BUNDLE_FILES
+        .iter()
+        .find(|(path, _)| *path == "kubernetes/severity.md")
+        .and_then(|(_, bytes)| std::str::from_utf8(bytes).ok())
+        .expect("kubernetes/severity.md must exist in prompt bundle")
+}
+
 /// Returns the compiled-in severity guide for `project`.
 pub fn severity_guide(project: ProjectId) -> &'static str {
     match project {
@@ -108,6 +117,7 @@ pub fn severity_guide(project: ProjectId) -> &'static str {
         ProjectId::Qemu => qemu_severity_guide(),
         ProjectId::Zephyr => zephyr_severity_guide(),
         ProjectId::E2fsprogs => e2fsprogs_severity_guide(),
+        ProjectId::Kubernetes => kubernetes_severity_guide(),
     }
 }
 
@@ -350,6 +360,23 @@ mod tests {
             assert!(
                 PROMPT_BUNDLE_FILES.iter().any(|(p, _)| *p == path),
                 "missing e2fsprogs framing file in bundle: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_kubernetes_prompt_bundle_integrity() {
+        let required_framing = [
+            "kubernetes/review-core.md",
+            "kubernetes/severity.md",
+            "kubernetes/false-positive-guide.md",
+            "kubernetes/report-template.md",
+            "kubernetes/maintainers/general.md",
+        ];
+        for path in required_framing {
+            assert!(
+                PROMPT_BUNDLE_FILES.iter().any(|(p, _)| *p == path),
+                "missing Kubernetes framing file in bundle: {path}"
             );
         }
     }

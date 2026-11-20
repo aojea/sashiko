@@ -971,6 +971,7 @@ fn is_non_linux_project_url(url: &str) -> bool {
         || lower.contains("qemu/qemu")
         || lower.contains("zephyrproject-rtos/zephyr")
         || lower.contains("e2fsprogs")
+        || lower.contains("kubernetes/kubernetes")
         || lower.contains("sashiko")
 }
 
@@ -2460,7 +2461,12 @@ F: patterns/
                 ProjectId::Zephyr,
                 "https://github.com/zephyrproject-rtos/zephyr.git",
             ),
+            (
+                ProjectId::Kubernetes,
+                "https://github.com/kubernetes/kubernetes.git",
+            ),
         ] {
+            let branch = project.mainline_branch();
             let dir = tempfile::tempdir().unwrap();
             let repo = dir.path();
             git(repo, &["init", "--quiet"]).await;
@@ -2480,7 +2486,7 @@ F: patterns/
             .await;
 
             let registry = BaselineRegistry::new(repo, None, Some(project)).unwrap();
-            assert_eq!(registry.mainline_ref(), "origin/main");
+            assert_eq!(registry.mainline_ref(), format!("origin/{branch}"));
             assert!(registry.entries.is_empty());
             assert_eq!(
                 registry
@@ -2489,13 +2495,13 @@ F: patterns/
                 vec![BaselineResolution::RemoteTarget {
                     url: fork.to_string(),
                     name: "origin".to_string(),
-                    branch: Some("main".to_string()),
+                    branch: Some(branch.to_string()),
                 }]
             );
 
             git(repo, &["remote", "add", "upstream", upstream]).await;
             let registry = BaselineRegistry::new(repo, None, Some(project)).unwrap();
-            assert_eq!(registry.mainline_ref(), "upstream/main");
+            assert_eq!(registry.mainline_ref(), format!("upstream/{branch}"));
             assert_eq!(
                 registry
                     .resolve_candidates(&[], "[PATCH] fix cleanup", None)
@@ -2504,12 +2510,12 @@ F: patterns/
                     BaselineResolution::RemoteTarget {
                         url: upstream.to_string(),
                         name: "upstream".to_string(),
-                        branch: Some("main".to_string()),
+                        branch: Some(branch.to_string()),
                     },
                     BaselineResolution::RemoteTarget {
                         url: fork.to_string(),
                         name: "origin".to_string(),
-                        branch: Some("main".to_string()),
+                        branch: Some(branch.to_string()),
                     },
                 ]
             );
